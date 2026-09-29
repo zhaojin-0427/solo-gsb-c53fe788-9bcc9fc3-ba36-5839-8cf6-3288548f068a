@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Seismic Network Phase Association API",
-    version="1.6.0",
+    version="1.7.0",
     description=(
         "Upload miniSEED waveform windows, generate STA/LTA candidate picks, "
         "associate them into events and locate them with weighted least squares "
@@ -46,7 +46,12 @@ app = FastAPI(
         "double-couple strike/dip/rake on a 10-degree grid for a completed "
         "event's associated P polarities, keeping every minimum-misfit "
         "mechanism with plane-swap duplicates removed but the "
-        "slip-reversed (-M) mechanism retained as a separate candidate."
+        "slip-reversed (-M) mechanism retained as a separate candidate. An "
+        "event location uncertainty assessment freezes a completed event's "
+        "associated picks, weights, velocity model and calibration version, "
+        "then bootstrap-relocates it on seeded with-replacement station "
+        "resamples, reporting nearest-rank confidence intervals, the "
+        "solvable-only sample covariance and the solvable rate."
     ),
     lifespan=lifespan,
 )
@@ -83,7 +88,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 def root():
     return {
         "service": "seismic-network-association",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "docs": "/docs",
         "health": "/health",
     }

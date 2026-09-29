@@ -178,6 +178,26 @@ class FocalMechanismCreate(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# event location uncertainty assessment (station bootstrap)
+# --------------------------------------------------------------------------- #
+class LocationUncertaintyCreate(BaseModel):
+    """Bootstrap uncertainty assessment for a completed run's event.
+
+    ``event_id`` selects the event of a completed run; the service freezes its
+    associated P/S picks (with weights), the velocity model, the calibration
+    version and the processing parameters, then re-locates the event
+    ``n_resamples`` times on with-replacement station resamples drawn with
+    ``seed`` (repeated stations weighted by multiplicity).  ``alpha`` is the
+    confidence level of the reported nearest-rank two-sided intervals.
+    """
+
+    event_id: str = Field(min_length=1, max_length=36)
+    n_resamples: int = Field(ge=200, le=2000)
+    alpha: float = Field(ge=0.8, le=0.99)
+    seed: int = Field(ge=0, le=2_147_483_647)
+
+
+# --------------------------------------------------------------------------- #
 # catalog alert orchestration
 # --------------------------------------------------------------------------- #
 class AlertRuleCreate(BaseModel):

@@ -452,6 +452,90 @@ class FocalMechanismSolution(Base):
 
 
 # --------------------------------------------------------------------------- #
+# event location uncertainty assessment (station bootstrap)
+#
+# An assessment freezes one completed event's associated P/S picks (with the
+# weights used by the original location), the velocity model, the calibration
+# version and the processing parameters, then re-locates the event N times on
+# seeded with-replacement resamples of the participating stations (repeated
+# stations weighted by multiplicity).  Each resample records its solvable
+# status and a structured failure reason; the report carries nearest-rank
+# two-sided (1-alpha)/2 confidence intervals for origin time/latitude/
+# longitude/depth, the sample covariance over the solvable resamples only and
+# the solvable rate.  Like the catalog, the station audit and the focal
+# mechanism inversion this layer never modifies ingestions/runs/events/picks
+# or catalog content: reports and samples are immutable and read-only.
+# --------------------------------------------------------------------------- #
+class LocationUncertaintyAssessment(Base):
+    """One idempotent bootstrap uncertainty assessment bound to an event."""
+
+    __tablename__ = "location_uncertainty_assessments"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    # Idempotency key: canonical content hash of (event, run, N, alpha, seed).
+    # Concurrent identical requests collapse on this index.
+    request_hash = Column(String(64), nullable=False, unique=True, index=True)
+    request = Column(JSON, nullable=False)
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=False, index=True)
+    run_id = Column(String(36), ForeignKey("runs.id"), nullable=False, index=True)
+
+    n_resamples = Column(Integer, nullable=False)
+    alpha = Column(Float, nullable=False)
+    seed = Column(Integer, nullable=False)
+
+    # Frozen analysis context (model/calibration snapshots, processing params,
+    # station coordinates and the original associated pick subset with
+    # weights) plus the baseline event solution; snapshotted at creation time
+    # so the assessment is reproducible even if the surrounding data evolves.
+    frozen = Column(JSON, nullable=False)
+    baseline = Column(JSON, nullable=False)
+
+    n_solved = Column(Integer, nullable=False)
+    n_failed = Column(Integer, nullable=False)
+    solvable_rate = Column(Float, nullable=False)
+    # Aggregate structured failure reasons over the failed resamples.
+    failure_reasons = Column(JSON, nullable=False, default=dict)
+    # Nearest-rank two-sided (1-alpha)/2 intervals + solvable-only covariance.
+    intervals = Column(JSON, nullable=False)
+    covariance = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_location_uncertainty_created", "created_at", "id"),
+    )
+
+
+class LocationUncertaintySample(Base):
+    """Outcome of one bootstrap resample within an assessment.
+
+    Rows are written once in resample order, so ``(assessment_id,
+    sample_index)`` doubles as the keyset-pagination order.
+    """
+
+    __tablename__ = "location_uncertainty_samples"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    assessment_id = Column(
+        String(36),
+        ForeignKey("location_uncertainty_assessments.id"),
+        nullable=False,
+        index=True,
+    )
+    sample_index = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, index=True)  # solved | failed
+    failure_reason = Column(String(32), nullable=True)
+    # Resampled station multiset {station_code: multiplicity} and, for solved
+    # resamples, the re-located solution snapshot.
+    stations = Column(JSON, nullable=False)
+    solution = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "sample_index", name="uq_uncertainty_sample_order"),
+        Index("ix_uncertainty_samples_assessment", "assessment_id", "sample_index"),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # catalog alert orchestration
 #
 # Administrators define immutable alert rule versions over the published

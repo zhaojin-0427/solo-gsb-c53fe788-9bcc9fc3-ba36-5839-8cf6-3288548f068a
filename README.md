@@ -14,6 +14,8 @@
 
 在此之上还有**目录告警编排（catalog alert orchestration）**：管理员针对**已发布目录**定义**不可变的告警规则版本**（质量等级、台站数、RMS、发震时刻时间窗、圆形区域条件可任意组合，另含合并时间间隔），以 `expected_revision` 做 CAS 发布（草稿 → 发布 → 停用）；对指定**目录编译批次**做评估时，按规则对每个（规则， 条目）匹配生成**确定性的命中记录**，同一规则的连续命中在合并间隔内合并为一条告警（抑制），命中已确认/已解除的告警则将其**升级**回打开；告警支持**确认**、**解除**与**幂等重评估**；目录条目撤回后只自动关闭**未确认**告警，命中与状态迁移全程留痕（审计链）；并发评估在唯一约束与序列化临界区保证下**不重复、不漏报**，查询均提供稳定游标。
 
+最后，针对任一**已完成事件**可做**事件定位不确定性评估（location uncertainty assessment / 台站自助法 bootstrap）**：客户端提交 `event_id`、重采样次数 `N`（200–2000）、置信水平 `α`（0.8–0.99）与随机种子；服务冻结该事件的关联 P/S 拾取（含权重）、速度模型、校准版本与处理参数，按种子**有放回**抽取与原台站数相同的台站并保留其全部关联拾取（重复台站按出现次数计权），用同一定位器重算 N 次，逐次记录可解状态与结构化失败原因；按**最近秩**取两侧 `(1−α)/2` 分位点输出发震时刻、纬度、经度、深度的 α 置信区间，仅用可解样本计算样本协方差并给出可解率；**有效样本少于 N 的 80% 明确拒绝（422）且不留状态**。评估按（事件， 参数， 种子）幂等，并发只生成一份，报告与样本只读并支持稳定游标分页，**不改动原事件、run 与目录**。
+
 ## 功能特性
 
 - **波形摄取**：base64 miniSEED + 台站元数据（经纬高、采样率、UTC 起点）；头部与声明元数据一致性校验
@@ -27,6 +29,7 @@
 - **台站影响审计**：冻结已完成事件的原始关联拾取、速度模型、校准版本（含逐站 P/S 偏移）与处理参数；逐一移除每个参与台站的全部 P/S 拾取并用同一确定性关联/定位重算；输出事件是否消失、发震时刻/经纬深度/RMS 增量、质量等级、关联（保留/丢弃）拾取集合与不可解原因；按事件消失 → 质量降级深度 → RMS 增幅 → 台站码稳定排序，关键台站（事件消失或质量降级）显式标注；报告绑定 event/run/参数哈希，幂等可重放，列表与逐台结果均支持游标分页，且不改动任何 run/event/目录内容
 - **目录告警编排**：针对已发布目录的不可变告警规则版本（质量/台站数/RMS/时间窗/圆形区域 + 合并间隔），`expected_revision` CAS 发布与停用；按目录编译批次做确定性评估，每个（规则， 条目）匹配恰好记录一次命中；连续命中按规则与合并间隔合并（抑制），命中已确认/已解除告警则升级回打开；支持确认、解除与幂等重评估；条目撤回只关闭未确认告警且审计链完整保留；并发评估不重复不漏报；全部列表查询提供稳定游标
 - **P 波初动震源机制反演**：针对已完成事件的关联 P 拾取提交正负极性与权重；用事件震源位置、台站坐标与该 run 的分层速度模型求射线方位角/出射角，10° 网格搜索双力偶（走向/倾角/滑动角），按完整候选集计算加权极性误判，最少者入选（零幅值按误判计）；去重仅合并互换节面的同一矩张量，**整体反号机制（滑动反向）保留为独立候选**；每组解返回两个节面、误判权重与逐台站观测/预测；同分最优解稳定排序 + 游标分页；非关联拾取、同站矛盾极性、< 6 独立台站、最大方位空档 ≥ 180° 明确拒绝；按（事件， 模型版本， 规范化极性集）幂等，并发同请求折叠为一份，只写独立反演表；旧版 M==-M 误去重的已存报告在重复提交或按 ID 查询时幂等、并发安全地惰性修正，原 ID/请求哈希/冻结快照不变
+- **事件定位不确定性评估**：冻结已完成事件的关联 P/S 拾取（含权重）、速度模型、校准版本与处理参数；按客户端种子有放回重采样与原台站数相同的台站（保留全部关联拾取，重复台站按出现次数计权），用同一加权最小二乘定位器重算 N 次（200–2000）；逐样本记录可解状态与结构化失败原因（`insufficient_stations`/`location_failed`/`not_converged`）；按最近秩两侧 `(1−α)/2` 分位点输出发震时刻/纬度/经度/深度的 α（0.8–0.99）置信区间，仅用可解样本计算样本协方差（ddof=1）与可解率；可解样本不足 80% 明确拒绝且不留状态；按（事件， 参数， 种子）幂等，并发折叠为一份，报告与样本只读 + 稳定游标分页，不改动原事件、run 与目录
 - **明确拒绝**：缺采样率、坐标越界、数据不足、校准门槛不达标等均以结构化错误码拒绝
 
 ## 快速启动（Docker Compose）
@@ -47,6 +50,7 @@ docker compose up --build
 | `http://localhost:8000/v1/catalog/entries` | 跨运行目录条目 |
 | `http://localhost:8000/v1/alert-rules`、`http://localhost:8000/v1/alerts` | 告警规则与告警事件 |
 | `http://localhost:8000/v1/focal-mechanisms` | P 波初动震源机制反演 |
+| `http://localhost:8000/v1/location-uncertainties` | 事件定位不确定性评估（台站 bootstrap） |
 
 ## 示例请求
 
@@ -466,6 +470,99 @@ curl -s "http://localhost:8000/v1/focal-mechanisms/<inversion_id>/solutions?limi
 - 反演不存在返回 `404 focal_mechanism_not_found`；列表按未知 `event_id` 过滤返回 `404 event_not_found`。
 - 除旧规则报告的一次性惰性修正（见上，ID/请求哈希/冻结输入不变）外，反演创建后内容不可变；反演**不修改原事件、run、拾取或目录内容**，`process`、`replay`、`compare`、目录与审计接口语义保持原样。
 
+## 事件定位不确定性评估（station bootstrap）
+
+评估是叠加在已完成事件之上的**只读分析层**，与目录、台站审计、震源机制反演一样不写 ingestions/runs/events/picks，也不触碰目录内容。提交时给出**已完成 run 的 `event_id`**、**重采样次数 `n_resamples`**（200–2000）、**置信水平 `alpha`**（0.8–0.99）与**随机种子 `seed`**，服务即冻结分析上下文并做 N 次台站自助法（bootstrap）重定位。
+
+### 冻结内容
+
+报告（`frozen` / `baseline`）在创建时固化以下信息，保证评估可复现：
+
+- **原始拾取子集**：该事件关联到的全部 P/S 拾取（pick_id、台站、相位、到时、来源、**权重**、残差）；
+- **速度模型**：原 run 的 `(name, version)` 与完整分层；
+- **校准版本**：原 run 若使用校准，固化校准版本号、状态及其逐站分相位偏移项（重定位时同样先修正到时）；未校准则为 `null`；
+- **处理参数**：原 run 的 `max_residual_s` / `min_stations`（后者作为可解性台站数门槛）；
+- 台站几何（经纬高）与原事件基线解（发震时刻、经纬深度、RMS、台站数、质量）。
+
+### 重采样与重定位
+
+每次重采样以 `numpy.random.default_rng(seed)` **有放回**抽取**与原参与台站数相同**的台站，保留被抽中台站的**全部冻结关联拾取**；同一台站被抽中 `k` 次时其拾取权重乘以 `k`（与物理重复该台站 `k` 次的正规方程完全等价）。随后用与 `process`/`replay` **完全相同的加权最小二乘定位器**（同一初值与阻尼）重算发震时刻与经纬深度。逐样本记录：
+
+- `status`：`solved` / `failed`；
+- `failure_reason`（结构化）：`insufficient_stations`（本次抽样的独立台站数低于冻结的 `min_stations`）、`location_failed`（定位系统欠定/奇异）、`not_converged`（迭代未收敛）；
+- `stations`：本次抽样的台站多重集（台站码 → 出现次数），其总数恒等于原台站数；
+- 可解样本的完整解（发震时刻、经纬深度、RMS、迭代次数）。
+
+### 统计输出
+
+- **置信区间**：对发震时刻、纬度、经度、深度分别按**最近秩（nearest-rank）**取两侧 `(1−α)/2` 分位点（秩为 `ceil(p·n)`，n 为可解样本数），上下界均为实际样本值；
+- **样本协方差**：仅用可解样本，按 `[origin_time_s, latitude, longitude, depth_km]` 顺序计算无偏（ddof=1）协方差矩阵（发震时刻以 epoch 秒计）；
+- **可解率**：`n_solved / n_resamples`，附各失败原因聚合计数 `failure_reasons`；
+- **明确拒绝**：可解样本少于 `n_resamples` 的 80% 时返回 `422 insufficient_solvable_samples`（消息含可解数、所需下限与失败原因计数），**不持久化任何报告或样本**；同一（事件， 参数， 种子）重复提交得到同一拒绝，效果幂等。
+
+### 1. 创建评估（幂等）
+
+```bash
+curl -s -X POST http://localhost:8000/v1/location-uncertainties \
+  -H 'Content-Type: application/json' -d '{
+    "event_id": "<event_id>",
+    "n_resamples": 500,
+    "alpha": 0.9,
+    "seed": 42
+  }' | python -m json.tool
+```
+
+- 首次 `201 created=true`；同一 `(event, n_resamples, alpha, seed)` 重复提交返回 `200` 与**同一 `assessment_id`/报告**（规范化 `request_hash`，并发相同请求在唯一索引上折叠为一份）。
+- 任一参数（含种子）不同即为**不同评估**；同一种子下逐样本的重采样与解完全确定（可复现）。
+- 校验：事件不存在返回 `404 event_not_found`；参数越界（N 不在 200–2000、α 不在 0.8–0.99、种子为负）返回 `422 validation_error`。
+
+响应节选：
+
+```json
+{
+  "assessment_id": "…", "created": true,
+  "event_id": "…", "run_id": "…", "ingestion_id": "…",
+  "request": {"event_id": "…", "run_id": "…", "n_resamples": 500, "alpha": 0.9, "seed": 42},
+  "n_resamples": 500, "alpha": 0.9, "seed": 42,
+  "n_solved": 491, "n_failed": 9, "solvable_rate": 0.982,
+  "min_solvable_required": 400,
+  "failure_reasons": {"insufficient_stations": 9},
+  "confidence_intervals": {
+    "alpha": 0.9, "method": "nearest_rank", "sample_count": 491,
+    "origin_time": {"lower": "2026-09-22T00:00:29.820Z", "upper": "2026-09-22T00:00:29.851Z"},
+    "latitude":  {"lower": 35.04991, "upper": 35.05072},
+    "longitude": {"lower": -117.95061, "upper": -117.94988},
+    "depth_km":  {"lower": 11.74, "upper": 11.97}
+  },
+  "covariance": {
+    "parameters": ["origin_time_s", "latitude", "longitude", "depth_km"],
+    "sample_count": 491,
+    "matrix": [[2.1e-05, "…", "…", "…"], ["…", 4.2e-08, "…", "…"], ["…", "…", 3.4e-08, "…"], ["…", "…", "…", 2.3e-03]]
+  },
+  "frozen": {"model": {"name": "default", "version": "1.0", "layers": ["…"]},
+             "calibration": null,
+             "params": {"max_residual_s": 1.0, "min_stations": 4},
+             "stations": ["…"], "picks": ["…"]},
+  "baseline": {"origin_time": "2026-09-22T00:00:29.828Z", "latitude": 35.05021,
+               "longitude": -117.95015, "depth_km": 11.96, "quality": "A", "…": "…"}
+}
+```
+
+### 2. 查询与分页
+
+```bash
+# 评估列表（可按 event_id / run_id 过滤），稳定键集分页 (created_at, assessment_id)
+curl -s "http://localhost:8000/v1/location-uncertainties?event_id=<event_id>&limit=50"
+
+# 单个报告（含冻结/基线快照、置信区间、协方差与可解率；不含逐样本列表）
+curl -s "http://localhost:8000/v1/location-uncertainties/<assessment_id>"
+
+# 逐样本分页（按 sample_index 稳定顺序），可按 status=solved|failed 过滤，不透明 next_cursor
+curl -s "http://localhost:8000/v1/location-uncertainties/<assessment_id>/samples?limit=100&status=failed"
+```
+
+游标携带查询指纹：把某过滤条件下发的游标用于其他过滤条件（或损坏的游标）返回 `422 invalid_cursor`。报告与样本**只读**，创建后不可变。
+
 ## 目录告警编排（catalog alert orchestration）
 
 告警是叠加在**已发布目录**之上的规则驱动层：管理员定义**不可变的告警规则版本**并以 CAS 发布；对任一**目录编译批次**做评估时，服务按规则对批次内**已发布条目**逐条匹配，为每个（规则， 条目）匹配生成**恰好一次**的确定性命中记录，并把连续命中按规则与合并间隔编排成告警事件。该层只读目录、只写自己的表：`process`/`replay`/`compare`、校准、目录与审计接口语义完全不变。
@@ -594,6 +691,10 @@ curl -s "http://localhost:8000/v1/alerts/evaluations?compilation_id=<compilation
 | GET | `/v1/focal-mechanisms` | 反演列表（可按 `event_id` 过滤，稳定游标分页） |
 | GET | `/v1/focal-mechanisms/{inversion_id}` | 查询单个反演（含冻结快照与同分最优解第一页） |
 | GET | `/v1/focal-mechanisms/{inversion_id}/solutions` | 同分最优解分页（稳定 (strike, dip, rake) 顺序，游标分页） |
+| POST | `/v1/location-uncertainties` | 事件定位不确定性评估（冻结拾取/权重/模型/校准，种子化台站 bootstrap 重定位 N 次；同请求幂等，首次 201，重复 200；可解样本 < 80% 时 422 拒绝不留状态） |
+| GET | `/v1/location-uncertainties` | 评估列表（可按 `event_id`/`run_id` 过滤，稳定游标分页） |
+| GET | `/v1/location-uncertainties/{assessment_id}` | 查询单个评估（冻结快照、基线、置信区间、协方差、可解率） |
+| GET | `/v1/location-uncertainties/{assessment_id}/samples` | 逐样本分页（重采样顺序，可按 `status=solved|failed` 过滤，游标分页） |
 | POST | `/v1/alert-rules` | 创建不可变告警规则版本（同 `(name, version)` 同内容幂等；内容不同 409） |
 | GET | `/v1/alert-rules`、`/v1/alert-rules/{rule_id}` | 列出（`name`/`status` 过滤 + 游标分页）/查看告警规则 |
 | POST | `/v1/alert-rules/{rule_id}/publish` | 发布草稿规则（`expected_revision` CAS，重复幂等） |
@@ -669,6 +770,15 @@ curl -s "http://localhost:8000/v1/alerts/evaluations?compilation_id=<compilation
 | `event_id` | 已完成 run 中的事件 ID（必填） |
 | `observations` | 极性观测列表（1–512 条）：`pick_id`（必须是该事件的**关联 P 拾取**）、`polarity`（`positive`/`negative`）、`weight`（0–10，默认 1.0）。同一台站只接受一种极性：同站同极性的重复提交按最大权重合并，同站矛盾极性返回 `422 contradictory_polarity`；规范化后独立台站须 ≥ 6 且最大方位空档 < 180° |
 
+### `POST /v1/location-uncertainties` 请求体
+
+| 字段 | 含义 |
+|---|---|
+| `event_id` | 已完成 run 中的事件 ID（必填） |
+| `n_resamples` | 台站 bootstrap 重采样次数（200–2000，必填） |
+| `alpha` | 置信水平（0.8–0.99，必填）；置信区间按最近秩取两侧 `(1−α)/2` 分位点 |
+| `seed` | 随机种子（0 到 2³¹−1，必填）；同一（事件， 参数， 种子）的重采样序列与逐样本解完全确定 |
+
 ### `POST /v1/alert-rules` 请求体
 | 字段 | 含义 |
 |---|---|
@@ -712,6 +822,7 @@ curl -s "http://localhost:8000/v1/alerts/evaluations?compilation_id=<compilation
 - **台站影响审计幂等且只读**：审计按 `(event_id, run_id, min_keep_stations)` 的规范哈希（`request_hash`）去重，重复/并发相同请求返回同一 `audit_id` 与逐台结果；不同 `min_keep_stations` 是不同审计（`params_hash` 同时绑定 run、模型/校准版本、原参数与本次门槛）。审计在内存中重算关联/定位，只写独立的审计表，冻结的拾取/模型/校准/参数随报告固化；它**不修改原事件、run、拾取或目录内容**，`process`、`replay`、`compare` 与目录接口语义保持原样。
 - **震源机制反演幂等且只读**：反演按 `(事件, 模型版本, 规范化极性集)` 的规范哈希（`request_hash`）去重——极性集按台站排序、同站同极性重复项按最大权重合并，因此与提交顺序无关；重复/并发相同请求在唯一索引上折叠为同一 `inversion_id` 与解集。模型分层、震源位置、逐台站射线几何与极性集随报告冻结，同分最优解一次性持久化并按（走向， 倾角， 滑动角）稳定排序分页；去重只合并互换节面的同一矩张量，滑动反向（`−M`）候选单独参与比较。反演只写独立的反演表，**不修改原事件、run、拾取或目录内容**，既有接口的请求、响应与幂等键均保持原样。旧版把 `M`/`−M` 合并的报告在重复提交或按原 ID 查询时惰性重算（幂等、单条条件 UPDATE 原子认领的并发安全修正），仅重写派生出的解集。
 - **目录告警编排幂等且只增不改**：规则版本内容自创建起不可变，仅生命周期迁移（草稿→发布→停用）更新 `revision`/时间戳；评估按规范请求哈希去重（唯一索引），重复请求即幂等重评估，只补录新匹配；命中以 `(rule_id, entry_id)` 唯一约束保证任何并发下不重复，序列化临界区（进程内锁 + PostgreSQL 咨询锁）保证评估/确认/解除/撤回联动互不交错、不漏报；告警确认/解除是幂等迁移，条目撤回只关闭未确认告警且不改写任何命中与审计链；告警层不写 ingestions/runs/events/picks 与目录内容，既有接口的请求、响应与幂等键均保持原样。
+- **定位不确定性评估幂等且只读**：评估按 `(event_id, run_id, n_resamples, alpha, seed)` 的规范哈希（`request_hash`）去重，重复/并发相同请求在唯一索引上折叠为同一 `assessment_id` 与报告；任一参数（含种子）不同即为不同评估。冻结的拾取（含权重）/模型/校准/参数随报告固化，重采样序列由种子完全确定（`numpy.random.default_rng(seed)` 逐次有放回抽取），逐样本结果一次性持久化且创建后不可变；可解样本不足 80% 的请求被 422 拒绝且不留任何状态（重复提交得到同一拒绝）。评估只写独立的评估/样本表，**不修改原事件、run、拾取或目录内容**，既有接口语义保持原样。
 
 ## 错误码
 
@@ -754,15 +865,19 @@ curl -s "http://localhost:8000/v1/alerts/evaluations?compilation_id=<compilation
 | 409 | `alert_rule_not_published` / `alert_rule_retired` | 草稿规则不可停用/评估 / 规则已停用不可再发布或评估 |
 | 409 | `alert_already_resolved` / `alert_closed` | 已解除告警不可确认 / 已关闭告警不可确认或解除 |
 | 422 | `invalid_rule_time_window` | 规则发震时刻窗只给一侧或 start ≥ end |
+| 404 | `location_uncertainty_not_found` | 定位不确定性评估不存在 |
+| 422 | `insufficient_solvable_samples` | bootstrap 可解样本不足重采样次数的 80%（拒绝且不留状态） |
 
 未关联拾取原因：`isolated`（窗内无其他拾取）、`insufficient_stations`（台站数不足）、`location_failed`（定位不收敛/欠定）、`residual_exceeded`（残差超限）。
+
+bootstrap 样本失败原因：`insufficient_stations`（本次抽样的独立台站数低于冻结的 `min_stations`）、`location_failed`（定位系统欠定/奇异）、`not_converged`（定位迭代未收敛）。
 
 ## 本地开发与测试
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest tests/ -q                 # 146 个测试（走时/定位/关联/Huber/校准生命周期/校准幂等/跨运行目录聚类/生命周期/分页/台站影响审计 leave-one-out/幂等/分页/只读/目录告警编排规则生命周期/评估幂等/合并抑制升级/确认解除/撤回联动/并发/游标/P 波初动震源机制反演网格搜索/仅互换节面去重与保留滑动反向候选/旧报告幂等并发安全惰性修正/拒绝/分页/只读，端到端 API，SQLite）
+pytest tests/ -q                 # 169 个测试（走时/定位/关联/Huber/校准生命周期/校准幂等/跨运行目录聚类/生命周期/分页/台站影响审计 leave-one-out/幂等/分页/只读/目录告警编排规则生命周期/评估幂等/合并抑制升级/确认解除/撤回联动/并发/游标/P 波初动震源机制反演网格搜索/仅互换节面去重与保留滑动反向候选/旧报告幂等并发安全惰性修正/拒绝/分页/只读/定位不确定性台站 bootstrap/最近秩分位/协方差/可解率门槛/幂等/并发/游标/只读，端到端 API，SQLite）
 DATABASE_URL=sqlite:////tmp/dev.db uvicorn app.main:app --reload   # 无 PostgreSQL 时本地调试
 ```
 
@@ -775,7 +890,7 @@ app/
   main.py               # FastAPI 入口、建表、默认模型播种、异常处理
   config.py             # 固定处理参数与阈值（环境变量 DATABASE_URL）
   database.py           # 引擎/会话
-  models.py             # SQLAlchemy 表（模型/摄取/波形/拾取/run/事件/校准/目录/审计/震源机制反演/告警）
+  models.py             # SQLAlchemy 表（模型/摄取/波形/拾取/run/事件/校准/目录/审计/震源机制反演/告警/定位不确定性评估）
   schemas.py            # Pydantic 请求模型
   api/routes.py         # HTTP 路由
   services/
@@ -794,7 +909,9 @@ app/
                         # 幂等冻结保存、旧版 M==−M 报告的幂等并发安全惰性修正
     alerting.py         # 目录告警编排：不可变规则版本与 CAS 生命周期、确定性评估与命中合并（抑制/升级）、
                         # 确认/解除、撤回联动关闭、序列化临界区与游标分页
+    location_uncertainty.py # 定位不确定性评估：冻结拾取/权重/模型/校准，种子化台站 bootstrap 重定位、
+                        # 最近秩置信区间、可解样本协方差与可解率门槛、幂等冻结保存、游标分页
     pipeline.py         # 摄取/关联/重放/校准创建与原子激活/比较编排与持久化
 scripts/make_example.py # 生成合成示例请求
-tests/                  # pytest（单元 + 端到端，146 个测试，SQLite）
+tests/                  # pytest（单元 + 端到端，169 个测试，SQLite）
 ```
