@@ -178,6 +178,28 @@ class FocalMechanismCreate(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# event location uncertainty assessment (station bootstrap)
+# --------------------------------------------------------------------------- #
+class LocationUncertaintyCreate(BaseModel):
+    """Assess the location uncertainty of a completed run's event.
+
+    Stations of the event are resampled with replacement ``resample_count``
+    times (seeded, deterministic); each draw keeps ALL of the station's
+    associated P/S picks and a station drawn k times contributes its picks
+    with k-fold weight.  Nearest-rank two-sided quantiles produce the
+    ``confidence_level`` confidence intervals of origin time, latitude,
+    longitude and depth; the sample covariance uses solvable samples only.
+    """
+
+    event_id: str = Field(min_length=1, max_length=36)
+    resample_count: int = Field(alias="N", ge=200, le=2000)
+    confidence_level: float = Field(alias="alpha", ge=0.8, le=0.99)
+    random_seed: int = Field(ge=0, le=2**63 - 1)
+
+    model_config = {"populate_by_name": True}
+
+
+# --------------------------------------------------------------------------- #
 # catalog alert orchestration
 # --------------------------------------------------------------------------- #
 class AlertRuleCreate(BaseModel):

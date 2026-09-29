@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Seismic Network Phase Association API",
-    version="1.6.0",
+    version="1.7.0",
     description=(
         "Upload miniSEED waveform windows, generate STA/LTA candidate picks, "
         "associate them into events and locate them with weighted least squares "
@@ -38,7 +38,15 @@ app = FastAPI(
         "lifecycle-managed catalog entries (draft/published/withdrawn). A "
         "station impact audit freezes one completed event and re-runs "
         "association/location after removing each participating station's P/S "
-        "picks, flagging the key stations. A catalog alert orchestration layer "
+        "picks, flagging the key stations. A seeded station-bootstrap "
+        "location uncertainty assessment freezes one completed event's "
+        "associated picks/weights, velocity model, calibration version and "
+        "processing params, resamples stations with replacement, relocates "
+        "with the existing locator and reports nearest-rank alpha confidence "
+        "intervals for origin time/latitude/longitude/depth, the "
+        "solvable-sample covariance and the solvable rate, rejecting "
+        "requests below an 80% effective-sample gate. A catalog alert "
+        "orchestration layer "
         "lets administrators publish immutable alert rule versions over the "
         "published catalog and evaluate catalog compilations into "
         "deterministic, mergeable alert events with a full audit chain. A "
@@ -83,7 +91,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 def root():
     return {
         "service": "seismic-network-association",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "docs": "/docs",
         "health": "/health",
     }

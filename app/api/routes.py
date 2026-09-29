@@ -19,12 +19,20 @@ from ..schemas import (
     CatalogPublishRequest,
     CatalogWithdrawRequest,
     FocalMechanismCreate,
+    LocationUncertaintyCreate,
     ModelCreate,
     ProcessRequest,
     ReplayRequest,
     StationAuditCreate,
 )
-from ..services import alerting, catalog_pipeline, focal_mechanism, pipeline, station_audit
+from ..services import (
+    alerting,
+    catalog_pipeline,
+    focal_mechanism,
+    location_uncertainty,
+    pipeline,
+    station_audit,
+)
 from ..services.pipeline import ApiError
 
 router = APIRouter()
@@ -286,6 +294,53 @@ def list_focal_mechanism_solutions(
 ):
     """Paginate the tied best solutions in their stable (strike, dip, rake) order."""
     return focal_mechanism.list_solutions(db, inversion_id, limit, cursor)
+
+
+# --------------------------------------------------------------------------- #
+# event location uncertainty assessment (station bootstrap)
+# --------------------------------------------------------------------------- #
+@router.post("/v1/location-uncertainty", status_code=201)
+def create_location_uncertainty(body: LocationUncertaintyCreate, db: Session = Depends(get_db)):
+    """Assess a completed event's location uncertainty by seeded station
+    bootstrap (idempotent by event/params/seed)."""
+    payload, created = location_uncertainty.create_assessment(
+        db,
+        body.event_id,
+        body.resample_count,
+        body.confidence_level,
+        body.random_seed,
+    )
+    return JSONResponse(payload, status_code=201 if created else 200)
+
+
+@router.get("/v1/location-uncertainty")
+def list_location_uncertainty(
+    event_id: str | None = Query(default=None, description="filter by event id"),
+    run_id: str | None = Query(default=None, description="filter by run id"),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """List assessments with stable keyset pagination (created_at, assessment_id)."""
+    return location_uncertainty.list_assessments(db, event_id, run_id, limit, cursor)
+
+
+@router.get("/v1/location-uncertainty/{assessment_id}")
+def get_location_uncertainty(assessment_id: str, db: Session = Depends(get_db)):
+    """Report with frozen context, baseline, intervals/covariance and the first
+    sample page (continue with the /samples endpoint)."""
+    return location_uncertainty.get_assessment(db, assessment_id)
+
+
+@router.get("/v1/location-uncertainty/{assessment_id}/samples")
+def list_location_uncertainty_samples(
+    assessment_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Paginate the N bootstrap samples in their stable resample order."""
+    return location_uncertainty.list_samples(db, assessment_id, limit, cursor)
 
 
 # --------------------------------------------------------------------------- #

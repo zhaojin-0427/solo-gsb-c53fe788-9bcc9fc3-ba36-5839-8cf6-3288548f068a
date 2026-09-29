@@ -6,6 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Column,
     DateTime,
     Float,
@@ -448,6 +449,92 @@ class FocalMechanismSolution(Base):
     __table_args__ = (
         UniqueConstraint("inversion_id", "sort_index", name="uq_focal_solution_order"),
         Index("ix_focal_solutions_inversion_sort", "inversion_id", "sort_index"),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# event location uncertainty assessment (station bootstrap)
+#
+# For one event of a completed run the client submits a resample count N, a
+# confidence level alpha and a random seed.  The service freezes the event's
+# associated P/S picks (with weights), the velocity model, the calibration
+# version (with its terms) and the processing parameters, then performs N
+# seed-driven bootstrap resamples: stations are drawn with replacement in the
+# same count as the original participating stations and ALL of each drawn
+# station's associated picks participate; a station drawn k times weights each
+# of its observations k-fold.  Each resample is relocated with the existing
+# locator; its solvable status and structured failure reason are recorded.
+# Nearest-rank two-sided (1-alpha)/2 quantiles yield alpha confidence
+# intervals for origin time, latitude, longitude and depth; the sample
+# covariance is computed over the solvable samples only.  Reports whose
+# solvable fraction is below 80% are rejected outright (422) and persist
+# nothing.  Like the catalog/audit layers this module never modifies
+# ingestions/runs/events/picks or catalog content.
+# --------------------------------------------------------------------------- #
+class LocationUncertaintyAssessment(Base):
+    """One idempotent station-bootstrap uncertainty assessment of an event."""
+
+    __tablename__ = "location_uncertainty_assessments"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    # Idempotency key: canonical hash of (event, run, N, alpha, seed);
+    # concurrent identical requests collapse on this unique index.
+    request_hash = Column(String(64), nullable=False, unique=True, index=True)
+    request = Column(JSON, nullable=False)
+    # Binds the frozen analysis context (model/calibration versions, original
+    # processing params) and the assessment params (N, alpha); the seed is
+    # part of request_hash only.
+    params_hash = Column(String(64), nullable=False)
+    event_id = Column(String(36), ForeignKey("events.id"), nullable=False, index=True)
+    run_id = Column(String(36), ForeignKey("runs.id"), nullable=False, index=True)
+    resample_count = Column(Integer, nullable=False)
+    confidence_level = Column(Float, nullable=False)
+    random_seed = Column(BigInteger, nullable=False)
+
+    # Frozen analysis context (model/calibration snapshots, processing params
+    # and station geometry) and the frozen baseline event solution.
+    frozen = Column(JSON, nullable=False)
+    baseline = Column(JSON, nullable=False)
+
+    station_count = Column(Integer, nullable=False)
+    solvable_count = Column(Integer, nullable=False)
+    solvable_rate = Column(Float, nullable=False)
+    failure_counts = Column(JSON, nullable=False, default=dict)
+    # Nearest-rank two-sided confidence intervals + solvable-sample covariance.
+    result = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_location_uncertainty_created", "created_at", "id"),
+    )
+
+
+class LocationUncertaintySample(Base):
+    """One bootstrap resample within an uncertainty assessment.
+
+    Rows are written once in resample order, so ``(assessment_id,
+    sample_index)`` doubles as the keyset-pagination order.
+    """
+
+    __tablename__ = "location_uncertainty_samples"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    assessment_id = Column(
+        String(36),
+        ForeignKey("location_uncertainty_assessments.id"),
+        nullable=False,
+        index=True,
+    )
+    sample_index = Column(Integer, nullable=False)
+    solvable = Column(Integer, nullable=False)  # 0/1
+    failure_reason = Column(String(32), nullable=True)
+    # Full sample detail: drawn (station, multiplicity) multiset, distinct
+    # participating stations, relocated solution (or null) and failure detail.
+    detail = Column(JSON, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "sample_index", name="uq_luc_sample_order"),
+        Index("ix_luc_samples_assessment_sort", "assessment_id", "sample_index"),
     )
 
 
